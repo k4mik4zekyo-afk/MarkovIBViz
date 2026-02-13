@@ -1,0 +1,4 @@
+extension_bin,terminal_outcome,count,probability,context_count,phase
+2.0+,A,119,0.2780373831775701,428,pre_ib
+2.0+,A*,25,0.05841121495327103,428,pre_ib
+2.0+,R,284,0.6635514018691588,428,pre_ib

@@ -1,0 +1,17 @@
+STRUCTURAL TEST REPORT
+========================================
+[PASS] [Pre-IB] Acceptance probability monotonically decreasing: Acceptance monotonicity: up=pass; down=pass
+[PASS] [Pre-IB] Rejection probability increases with failures: Rejection increase: up=pass; down=pass
+[FAIL] [Pre-IB] Extension distributions widen with persistence: Extension widening (std_extension_ib): up=fail; down=fail
+[PASS] [Pre-IB] Upside/downside approximately symmetric: count_ratio=1.03 (ok), ext_ratio=1.01 (ok), up_n=721, down_n=699
+[PASS] [Pre-IB] Sample sizes exceed minimum thresholds: All base states have >= 10 samples
+[PASS] [Post-IB] Acceptance probability monotonically decreasing: Acceptance monotonicity: up=pass; down=pass
+[FAIL] [Post-IB] Rejection probability increases with failures: Rejection increase: up=fail; down=fail
+[FAIL] [Post-IB] Extension distributions widen with persistence: Extension widening (std_extension_ib): up=fail; down=fail
+[PASS] [Post-IB] Upside/downside approximately symmetric: count_ratio=1.12 (ok), ext_ratio=1.24 (ok), up_n=2406, down_n=2142
+[PASS] [Post-IB] Sample sizes exceed minimum thresholds: All base states have >= 10 samples
+========================================
+Result: 7/10 passed
+
+Note: Structural test failures indicate invalid assumptions
+or insufficient data, not code errors.

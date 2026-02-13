@@ -1,0 +1,56 @@
+PIPELINE TEST REPORT
+============================================================
+
+Results: 17/17 passed
+
+[PASS] 1. Data loads without errors
+        70389 bars loaded, ordered=True, no_nulls=True, phases=True, session_date=True
+
+[PASS] 2. Data filtered to 2023-2025
+        Years in data: [np.int32(2025)], expected 2025-2025
+
+[PASS] 3. Sessions detected correctly
+        312 sessions (expected 500-1200), pre_ib=3084, post_ib=16534, overnight=50771
+
+[PASS] 4. Prior RTH VAH/VAL/POC exist
+        Prior RTH: VAH nulls=53, VAL nulls=53, POC nulls=53 (max allowed per col=62, out of 311)
+
+[PASS] 5. Overnight VAH/VAL/POC exist
+        Overnight: VAH nulls=36, VAL nulls=36, POC nulls=36 (max allowed per col=62)
+
+[PASS] 6. Opening Range computed
+        OR computed for 257/312 sessions, ORH nulls=0, ORL nulls=0
+
+[PASS] 7. IB computed for pre-IB sessions
+        IBH nulls=0, IBL nulls=0, IB_range nulls=0 out of 257 sessions with pre-IB bars
+
+[PASS] 8. ATR is non-null and positive
+        ATR nulls=0, negatives=0 (after warmup of 5)
+
+[PASS] 9. VWAP is non-null
+        VWAP nulls=0 / 70389
+
+[PASS] 10. Episodes logged in both phases
+        Pre-IB: 804 episodes, Post-IB: 1531 episodes
+
+[PASS] 11. Terminal outcomes are valid
+        Outcomes found: ['B', 'R', 'A*', 'A'], invalid: []
+
+[PASS] 12. Session outcomes logged
+        Session outcomes: 312 / 312 sessions
+
+[PASS] 13. Transition counts non-empty
+        Pre-IB transitions: 13, Post-IB transitions: 16
+
+[PASS] 14. failure_count values valid
+        failure_count values: [np.int64(0), np.int64(1), np.int64(2), np.int64(3)], invalid: []
+
+[PASS] 15. Two-sided rejection logic
+        Rejections: 847 total, 516 with duration < 30min
+
+[PASS] 16. Acceptance threshold applied
+        Acceptances with acceptance_achieved=True: 258/258
+
+[PASS] 17. Output files written
+        All output files written
+

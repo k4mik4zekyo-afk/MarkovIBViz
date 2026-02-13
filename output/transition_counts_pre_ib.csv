@@ -1,0 +1,14 @@
+direction,failure_count,extension_bin,phase,count_acceptance,count_acceptance_incomplete,count_rejection,total_observations,avg_duration_minutes
+down,0,0.0-0.5,pre_ib,0,0,16,16,8.75
+down,0,0.5-1.0,pre_ib,0,2,25,27,11.296296296296296
+down,0,1.0-1.5,pre_ib,0,3,20,23,20.0
+down,0,1.5-2.0,pre_ib,2,4,18,24,23.958333333333332
+down,0,2.0+,pre_ib,44,3,54,101,52.07920792079208
+down,1,1.0-1.5,pre_ib,0,0,1,1,10.0
+down,1,1.5-2.0,pre_ib,0,1,1,2,20.0
+up,0,0.0-0.5,pre_ib,0,0,16,16,10.625
+up,0,0.5-1.0,pre_ib,0,3,27,30,13.666666666666666
+up,0,1.0-1.5,pre_ib,4,3,17,24,30.0
+up,0,1.5-2.0,pre_ib,2,3,12,17,30.88235294117647
+up,0,2.0+,pre_ib,67,3,76,146,55.17123287671233
+up,1,0.5-1.0,pre_ib,0,0,1,1,15.0

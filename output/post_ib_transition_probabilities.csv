@@ -1,0 +1,8 @@
+failure_count,terminal_outcome,count,probability,context_count,phase
+0,A,136,0.1918194640338505,709,post_ib
+0,A*,15,0.021156558533145273,709,post_ib
+0,R,558,0.7870239774330042,709,post_ib
+1,A,3,0.5,6,post_ib
+1,R,3,0.5,6,post_ib
+2,R,1,1.0,1,post_ib
+3,R,1,1.0,1,post_ib

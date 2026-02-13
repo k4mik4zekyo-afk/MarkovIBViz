@@ -1,0 +1,17 @@
+direction,failure_count,extension_bin,phase,count_acceptance,count_acceptance_incomplete,count_rejection,total_observations,avg_duration_minutes
+down,0,0.0-0.5,post_ib,0,1,32,33,10.454545454545455
+down,0,0.5-1.0,post_ib,0,1,89,90,13.555555555555555
+down,0,1.0-1.5,post_ib,1,1,55,57,23.07017543859649
+down,0,1.5-2.0,post_ib,1,0,33,34,41.3235294117647
+down,0,2.0+,post_ib,56,1,49,106,141.1320754716981
+down,1,1.0-1.5,post_ib,1,0,1,2,37.5
+down,1,2.0+,post_ib,2,0,0,2,110.0
+up,0,0.0-0.5,post_ib,0,1,57,58,10.60344827586207
+up,0,0.5-1.0,post_ib,0,2,113,115,14.73913043478261
+up,0,1.0-1.5,post_ib,1,4,52,57,26.92982456140351
+up,0,1.5-2.0,post_ib,3,2,35,40,51.125
+up,0,2.0+,post_ib,74,2,43,119,172.56302521008402
+up,1,0.5-1.0,post_ib,0,0,1,1,10.0
+up,1,1.5-2.0,post_ib,0,0,1,1,100.0
+up,2,0.5-1.0,post_ib,0,0,1,1,20.0
+up,3,0.0-0.5,post_ib,0,0,1,1,10.0
