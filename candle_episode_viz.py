@@ -123,6 +123,13 @@ def build_figure(session_date, candles, episodes, profiles):
         )
 
     # ── Candlestick trace ───────────────────────────────────────────────────
+    hover_texts = []
+    for _, r in day_candles.iterrows():
+        hover_texts.append(
+            f"O: {r['open']:.2f}  H: {r['high']:.2f}<br>"
+            f"L: {r['low']:.2f}  C: {r['close']:.2f}<br>"
+            f"Vol: {int(r['volume']):,}"
+        )
     fig.add_trace(
         go.Candlestick(
             x=day_candles["datetime"],
@@ -136,6 +143,8 @@ def build_figure(session_date, candles, episodes, profiles):
             increasing_fillcolor="#22c55e",
             decreasing_fillcolor="#ef4444",
             whiskerwidth=0.4,
+            text=hover_texts,
+            hoverinfo="text",
         ),
         row=1, col=1,
     )
@@ -153,6 +162,7 @@ def build_figure(session_date, candles, episodes, profiles):
             opacity=0.5,
             name="Volume",
             showlegend=False,
+            hovertemplate="Vol: %{y:,.0f}<extra></extra>",
         ),
         row=2, col=1,
     )
@@ -395,8 +405,9 @@ def build_figure(session_date, candles, episodes, profiles):
         yaxis_title="Price",
         yaxis2_title="Volume",
         template="plotly_white",
-        height=800,
-        margin=dict(l=60, r=200, t=60, b=140),
+        width=1800,
+        height=1600,
+        margin=dict(l=60, r=220, t=60, b=160),
         legend=dict(
             orientation="v",
             yanchor="top", y=0.65,
