@@ -109,9 +109,6 @@ def build_figure(session_date, candles, episodes, profiles):
     )
 
     # ── Episode background shading (vrects) ─────────────────────────────────
-    discovery_eps = day_episodes[day_episodes["state_type"] == "discovery"]
-    failure_cumulative = 0  # running tally of rejections for annotation positioning
-
     for idx, ep in day_episodes.iterrows():
         outcome = ep["terminal_outcome"]
         fill = OUTCOME_COLORS.get(outcome, "rgba(200,200,200,0.1)")
@@ -212,9 +209,9 @@ def build_figure(session_date, candles, episodes, profiles):
             row=1, col=1,
         )
 
-    # ── Episode annotations ─────────────────────────────────────────────────
-    # Tracks the running failure count per direction for transition detection
+    # ── Episode annotations (below volume panel to avoid overlap) ───────────
     prev_d_state = {}  # direction -> previous D-state string
+    disc_counter = 0   # for alternating y-levels
 
     for idx, ep in day_episodes.iterrows():
         outcome = ep["terminal_outcome"]
@@ -224,34 +221,16 @@ def build_figure(session_date, candles, episodes, profiles):
         mid_time = ep["start_time"] + (ep["end_time"] - ep["start_time"]) / 2
 
         if state_type == "balance":
-            # Small "B" label at top of balance region
-            fig.add_annotation(
-                x=mid_time, y=price_max + price_pad * 0.3,
-                text="B",
-                showarrow=False,
-                font=dict(size=9, color=OUTCOME_TEXT["B"]),
-                opacity=0.6,
-                row=1, col=1,
-            )
             continue
 
         # ── Discovery episode annotations ───────────────────────────────────
-        # D-state label + failure count badge
         fc = int(ep["failure_count_at_start"])
         d_label = d_state
         ext_pts = ep["max_extension_points"]
         ext_atr = ep["max_extension_atr"] if pd.notna(ep["max_extension_atr"]) else 0
         dur_min = int(ep["duration_minutes"])
 
-        # Position: above candles for up, below for down
-        if direction == "up":
-            ann_y = price_max + price_pad * 0.7
-            arrow_y = price_max + price_pad * 0.15
-            marker_y = ibh
-        else:
-            ann_y = price_min - price_pad * 0.7
-            arrow_y = price_min - price_pad * 0.15
-            marker_y = ibl
+        marker_y = ibh if direction == "up" else ibl
 
         # Build annotation text block
         outcome_label = outcome
@@ -259,43 +238,38 @@ def build_figure(session_date, candles, episodes, profiles):
             acc_min = int(ep["time_in_acceptance_min"]) if pd.notna(ep["time_in_acceptance_min"]) else 0
             outcome_label = f"A ({acc_min}m)"
 
-        text_lines = [
-            f"<b>{d_label}</b>  →  <b>{outcome_label}</b>",
-            f"{ext_pts:.0f}pt / {ext_atr:.1f}σ  ·  {dur_min}m",
-        ]
-        if fc > 0:
-            text_lines[0] = f"<b>{d_label}</b> (×{fc} fail)  →  <b>{outcome_label}</b>"
+        # Compact single-line format
+        fail_tag = f" (x{fc} fail)" if fc > 0 else ""
+        dir_arrow = "\u25B2" if direction == "up" else "\u25BC"
+        ann_text = f"{dir_arrow} <b>{d_label}</b>{fail_tag} → <b>{outcome_label}</b>  {ext_pts:.0f}pt/{ext_atr:.1f}σ  {dur_min}m"
 
         text_color = OUTCOME_TEXT.get(outcome, "#374151")
 
+        # Alternate between two y-levels below volume
+        y_level = -0.07 if disc_counter % 2 == 0 else -0.16
+        disc_counter += 1
+
         fig.add_annotation(
-            x=mid_time, y=ann_y,
-            text="<br>".join(text_lines),
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=0.8,
-            arrowwidth=1,
-            arrowcolor=text_color,
-            ax=0, ay=30 if direction == "down" else -30,
-            font=dict(size=10, color=text_color),
+            x=mid_time, y=y_level,
+            xref="x2", yref="paper",
+            text=ann_text,
+            showarrow=False,
+            font=dict(size=9, color=text_color),
             align="center",
-            bgcolor="rgba(255,255,255,0.85)",
+            bgcolor="rgba(255,255,255,0.92)",
             bordercolor=text_color,
             borderwidth=1,
             borderpad=3,
-            row=1, col=1,
         )
 
-        # ── Transition arrow (D-state escalation) ──────────────────────────
+        # ── Transition arrow (D-state escalation — in candle area) ──────────
         if direction and direction in prev_d_state:
             prev = prev_d_state[direction]
             if d_state != prev and d_state != "D0":
-                # Draw a curved arrow from previous episode end to this start
+                trans_y = price_max + price_pad * 0.3 if direction == "up" else price_min - price_pad * 0.3
                 fig.add_annotation(
-                    x=ep["start_time"],
-                    y=ann_y + (price_pad * 0.2 if direction == "up" else -price_pad * 0.2),
-                    ax=-40,
-                    ay=0,
+                    x=ep["start_time"], y=trans_y,
+                    ax=-40, ay=0,
                     text=f"{prev}→{d_state}",
                     showarrow=True,
                     arrowhead=3,
@@ -421,8 +395,8 @@ def build_figure(session_date, candles, episodes, profiles):
         yaxis_title="Price",
         yaxis2_title="Volume",
         template="plotly_white",
-        height=750,
-        margin=dict(l=60, r=200, t=60, b=40),
+        height=800,
+        margin=dict(l=60, r=200, t=60, b=140),
         legend=dict(
             orientation="v",
             yanchor="top", y=0.65,

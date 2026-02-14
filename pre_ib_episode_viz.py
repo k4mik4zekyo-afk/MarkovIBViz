@@ -1,15 +1,14 @@
 """
 pre_ib_episode_viz.py — Plotly candlestick visualization with pre-IB Markov episode overlays.
 
-Displays a two-day view: prior day's full RTH session + overnight + current day's
-pre-IB window (6:30–7:25am) with pre-IB episode overlays including:
+Displays two full RTH sessions (prior day 6:30am–1:00pm + current day 6:30am–1:00pm)
+with pre-IB episode overlays on the current day's pre-IB window including:
 - Prior RTH VAH / VAL reference boundaries (pre-IB discovery boundaries)
 - Prior RTH POC
-- Overnight high / low
-- IBH / IBL lines (formed at end of pre-IB window)
-- Phase separators (prior RTH end, overnight, RTH open)
+- Toggle button to switch between prior day IBH/IBL vs current day IBH/IBL
+- Phase separators (Prior RTH End, RTH Open, IB Formed)
 - Episode shading with color-coded backgrounds
-- D-state + failure count annotations
+- D-state + failure count annotations (below volume to avoid overlap)
 - Transition arrows on D-state escalation
 - Terminal outcome markers (A, A*, R, B)
 
@@ -31,7 +30,7 @@ from plotly.subplots import make_subplots
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 
-# ── Colour palette (shared with candle_episode_viz.py) ──────────────────────
+# ── Colour palette ──────────────────────────────────────────────────────────
 OUTCOME_COLORS = {
     "A":  "rgba(16, 185, 129, 0.18)",
     "A*": "rgba(56, 189, 248, 0.18)",
@@ -85,7 +84,7 @@ def _get_prior_session_date(session_date, profiles):
 
 
 def build_figure(session_date, candles, episodes, profiles):
-    """Build the Plotly figure for a two-day view centred on the pre-IB window."""
+    """Build the Plotly figure showing two full RTH sessions with pre-IB episode overlays."""
 
     prior_date = _get_prior_session_date(session_date, profiles)
     day_profile = profiles[profiles["session_date"] == session_date]
@@ -99,13 +98,21 @@ def build_figure(session_date, candles, episodes, profiles):
     prior_poc = prof["prior_rth_poc"] if pd.notna(prof.get("prior_rth_poc")) else np.nan
     ibh = prof["ibh"] if pd.notna(prof.get("ibh")) else np.nan
     ibl = prof["ibl"] if pd.notna(prof.get("ibl")) else np.nan
-    on_high = prof["overnight_high"] if pd.notna(prof.get("overnight_high")) else np.nan
-    on_low = prof["overnight_low"] if pd.notna(prof.get("overnight_low")) else np.nan
 
-    # ── Gather candles: prior day RTH + overnight + current pre-IB ──────────
+    # Prior day IBH/IBL for toggle
+    prior_ibh = np.nan
+    prior_ibl = np.nan
+    if prior_date:
+        prior_prof = profiles[profiles["session_date"] == prior_date]
+        if not prior_prof.empty:
+            pp = prior_prof.iloc[0]
+            prior_ibh = pp["ibh"] if pd.notna(pp.get("ibh")) else np.nan
+            prior_ibl = pp["ibl"] if pd.notna(pp.get("ibl")) else np.nan
+
+    # ── Gather candles: 2 full RTH sessions ─────────────────────────────────
     frames = []
 
-    # Prior day: pre_ib + post_ib (the RTH bars)
+    # Prior day full RTH (pre_ib + post_ib)
     if prior_date:
         prior_rth = candles[
             (candles["session_date"] == prior_date) &
@@ -114,25 +121,16 @@ def build_figure(session_date, candles, episodes, profiles):
         prior_rth["section"] = "prior_rth"
         frames.append(prior_rth)
 
-    # Overnight bars live under the prior session_date
-    if prior_date:
-        overnight = candles[
-            (candles["session_date"] == prior_date) &
-            (candles["phase"] == "overnight")
-        ].copy()
-        overnight["section"] = "overnight"
-        frames.append(overnight)
-
-    # Current day pre-IB
-    current_pre = candles[
+    # Current day full RTH (pre_ib + post_ib)
+    current_rth = candles[
         (candles["session_date"] == session_date) &
-        (candles["phase"] == "pre_ib")
+        (candles["phase"].isin(["pre_ib", "post_ib"]))
     ].copy()
-    current_pre["section"] = "pre_ib"
-    frames.append(current_pre)
+    current_rth["section"] = "current_rth"
+    frames.append(current_rth)
 
-    if not frames:
-        print(f"No candle data for {session_date} (or prior day).")
+    if not frames or all(f.empty for f in frames):
+        print(f"No candle data for {session_date}.")
         sys.exit(1)
 
     all_candles = pd.concat(frames).sort_values("datetime").reset_index(drop=True)
@@ -204,8 +202,7 @@ def build_figure(session_date, candles, episodes, profiles):
         row=2, col=1,
     )
 
-    # ── Reference lines ─────────────────────────────────────────────────────
-    # Prior VAH / VAL (the pre-IB discovery boundaries)
+    # ── Reference lines (hlines for VAH/VAL/POC — always visible) ──────────
     if pd.notna(prior_vah):
         fig.add_hline(
             y=prior_vah, line=dict(color="#8b5cf6", width=1.5, dash="dash"),
@@ -231,44 +228,88 @@ def build_figure(session_date, candles, episodes, profiles):
             row=1, col=1,
         )
 
-    # IBH / IBL (formed at end of pre-IB)
+    # ── IBH/IBL as Scatter traces (toggleable) ─────────────────────────────
+    # We need trace indices for the toggle buttons.
+    # Count existing traces: candlestick (1) + volume (1) = 2 traces so far.
+    x_range = [all_candles["datetime"].min(), all_candles["datetime"].max()]
+
+    # Current day IBH/IBL traces (visible by default)
+    curr_ibh_trace = None
+    curr_ibl_trace = None
     if pd.notna(ibh):
-        fig.add_hline(
-            y=ibh, line=dict(color="#3b82f6", width=1.5, dash="dash"),
-            annotation_text=f"IBH {ibh:.2f}",
-            annotation_position="top right",
-            annotation_font=dict(color="#3b82f6", size=10),
+        curr_ibh_trace = len(fig.data)
+        fig.add_trace(
+            go.Scatter(
+                x=x_range, y=[ibh, ibh],
+                mode="lines+text",
+                line=dict(color="#3b82f6", width=1.5, dash="dash"),
+                text=[f"Current IBH {ibh:.2f}", ""],
+                textposition="top left",
+                textfont=dict(color="#3b82f6", size=10),
+                name=f"Current IBH {ibh:.0f}",
+                showlegend=False,
+                visible=True,
+            ),
             row=1, col=1,
         )
     if pd.notna(ibl):
-        fig.add_hline(
-            y=ibl, line=dict(color="#f59e0b", width=1.5, dash="dash"),
-            annotation_text=f"IBL {ibl:.2f}",
-            annotation_position="bottom right",
-            annotation_font=dict(color="#f59e0b", size=10),
+        curr_ibl_trace = len(fig.data)
+        fig.add_trace(
+            go.Scatter(
+                x=x_range, y=[ibl, ibl],
+                mode="lines+text",
+                line=dict(color="#f59e0b", width=1.5, dash="dash"),
+                text=[f"Current IBL {ibl:.2f}", ""],
+                textposition="bottom left",
+                textfont=dict(color="#f59e0b", size=10),
+                name=f"Current IBL {ibl:.0f}",
+                showlegend=False,
+                visible=True,
+            ),
             row=1, col=1,
         )
 
-    # Overnight high / low
-    if pd.notna(on_high):
-        fig.add_hline(
-            y=on_high, line=dict(color="#6b7280", width=1, dash="dot"),
-            annotation_text=f"ON High {on_high:.2f}",
-            annotation_position="top right",
-            annotation_font=dict(color="#6b7280", size=9),
+    # Prior day IBH/IBL traces (hidden by default)
+    prior_ibh_trace = None
+    prior_ibl_trace = None
+    if pd.notna(prior_ibh):
+        prior_ibh_trace = len(fig.data)
+        fig.add_trace(
+            go.Scatter(
+                x=x_range, y=[prior_ibh, prior_ibh],
+                mode="lines+text",
+                line=dict(color="#3b82f6", width=1.5, dash="longdashdot"),
+                text=[f"Prior IBH {prior_ibh:.2f}", ""],
+                textposition="top left",
+                textfont=dict(color="#3b82f6", size=10),
+                name=f"Prior IBH {prior_ibh:.0f}",
+                showlegend=False,
+                visible=False,
+            ),
             row=1, col=1,
         )
-    if pd.notna(on_low):
-        fig.add_hline(
-            y=on_low, line=dict(color="#6b7280", width=1, dash="dot"),
-            annotation_text=f"ON Low {on_low:.2f}",
-            annotation_position="bottom right",
-            annotation_font=dict(color="#6b7280", size=9),
+    if pd.notna(prior_ibl):
+        prior_ibl_trace = len(fig.data)
+        fig.add_trace(
+            go.Scatter(
+                x=x_range, y=[prior_ibl, prior_ibl],
+                mode="lines+text",
+                line=dict(color="#f59e0b", width=1.5, dash="longdashdot"),
+                text=[f"Prior IBL {prior_ibl:.2f}", ""],
+                textposition="bottom left",
+                textfont=dict(color="#f59e0b", size=10),
+                name=f"Prior IBL {prior_ibl:.0f}",
+                showlegend=False,
+                visible=False,
+            ),
             row=1, col=1,
         )
+
+    # Track index where toggle traces end (before episode markers start)
+    n_traces_before_episodes = len(fig.data)
 
     # ── Phase separators ────────────────────────────────────────────────────
-    # Prior RTH end → overnight start
+    # Prior day RTH end
     if prior_date:
         prior_post = candles[
             (candles["session_date"] == prior_date) &
@@ -283,14 +324,15 @@ def build_figure(session_date, candles, episodes, profiles):
             )
             fig.add_annotation(
                 x=rth_end_time, y=price_max + price_pad * 0.9,
-                text="Prior RTH End",
+                text=f"Prior RTH End ({prior_date})",
                 showarrow=False,
                 font=dict(size=8, color="#64748b"),
                 bgcolor="rgba(255,255,255,0.8)",
                 row=1, col=1,
             )
 
-    # RTH open (current day 6:30am)
+    # Current day RTH open (6:30am)
+    current_pre = current_rth[current_rth["phase"] == "pre_ib"]
     if not current_pre.empty:
         rth_open_time = current_pre["datetime"].min()
         fig.add_vline(
@@ -300,15 +342,33 @@ def build_figure(session_date, candles, episodes, profiles):
         )
         fig.add_annotation(
             x=rth_open_time, y=price_max + price_pad * 0.9,
-            text="RTH Open",
+            text=f"RTH Open ({session_date})",
             showarrow=False,
             font=dict(size=9, color="#64748b"),
             bgcolor="rgba(255,255,255,0.8)",
             row=1, col=1,
         )
 
-    # ── Episode annotations ─────────────────────────────────────────────────
+    # IB formed (7:30am current day)
+    if not current_pre.empty:
+        ib_boundary_time = current_pre["datetime"].max() + pd.Timedelta(minutes=5)
+        fig.add_vline(
+            x=ib_boundary_time,
+            line=dict(color="#94a3b8", width=1.5, dash="dashdot"),
+            row=1, col=1,
+        )
+        fig.add_annotation(
+            x=ib_boundary_time, y=price_max + price_pad * 0.6,
+            text="IB Formed",
+            showarrow=False,
+            font=dict(size=9, color="#64748b"),
+            bgcolor="rgba(255,255,255,0.8)",
+            row=1, col=1,
+        )
+
+    # ── Episode annotations (below volume panel) ───────────────────────────
     prev_d_state = {}
+    disc_counter = 0  # for alternating y-levels
 
     for _, ep in day_episodes.iterrows():
         outcome = ep["terminal_outcome"]
@@ -318,14 +378,6 @@ def build_figure(session_date, candles, episodes, profiles):
         mid_time = ep["start_time"] + (ep["end_time"] - ep["start_time"]) / 2
 
         if state_type == "balance":
-            fig.add_annotation(
-                x=mid_time, y=price_max + price_pad * 0.3,
-                text="B",
-                showarrow=False,
-                font=dict(size=9, color=OUTCOME_TEXT["B"]),
-                opacity=0.6,
-                row=1, col=1,
-            )
             continue
 
         # ── Discovery episode annotations ───────────────────────────────────
@@ -334,12 +386,10 @@ def build_figure(session_date, candles, episodes, profiles):
         ext_atr = ep["max_extension_atr"] if pd.notna(ep["max_extension_atr"]) else 0
         dur_min = int(ep["duration_minutes"])
 
-        # Reference boundary for markers: prior VAH for up, prior VAL for down
+        # Reference boundary for markers
         if direction == "up":
-            ann_y = price_max + price_pad * 0.7
             marker_y = prior_vah if pd.notna(prior_vah) else ibh
         else:
-            ann_y = price_min - price_pad * 0.7
             marker_y = prior_val if pd.notna(prior_val) else ibl
 
         outcome_label = outcome
@@ -347,40 +397,39 @@ def build_figure(session_date, candles, episodes, profiles):
             acc_min = int(ep["time_in_acceptance_min"]) if pd.notna(ep["time_in_acceptance_min"]) else 0
             outcome_label = f"A ({acc_min}m)"
 
-        text_lines = [
-            f"<b>{d_state}</b>  →  <b>{outcome_label}</b>",
-            f"{ext_pts:.0f}pt / {ext_atr:.1f}σ  ·  {dur_min}m",
-        ]
-        if fc > 0:
-            text_lines[0] = f"<b>{d_state}</b> (×{fc} fail)  →  <b>{outcome_label}</b>"
+        # Compact single-line format
+        fail_tag = f" (x{fc} fail)" if fc > 0 else ""
+        ann_text = f"<b>{d_state}</b>{fail_tag} → <b>{outcome_label}</b>  {ext_pts:.0f}pt/{ext_atr:.1f}σ  {dur_min}m"
+
+        dir_arrow = "\u25B2" if direction == "up" else "\u25BC"
+        ann_text = f"{dir_arrow} {ann_text}"
 
         text_color = OUTCOME_TEXT.get(outcome, "#374151")
 
+        # Alternate between two y-levels below volume
+        y_level = -0.07 if disc_counter % 2 == 0 else -0.16
+        disc_counter += 1
+
         fig.add_annotation(
-            x=mid_time, y=ann_y,
-            text="<br>".join(text_lines),
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=0.8,
-            arrowwidth=1,
-            arrowcolor=text_color,
-            ax=0, ay=30 if direction == "down" else -30,
-            font=dict(size=10, color=text_color),
+            x=mid_time, y=y_level,
+            xref="x2", yref="paper",
+            text=ann_text,
+            showarrow=False,
+            font=dict(size=9, color=text_color),
             align="center",
-            bgcolor="rgba(255,255,255,0.85)",
+            bgcolor="rgba(255,255,255,0.92)",
             bordercolor=text_color,
             borderwidth=1,
             borderpad=3,
-            row=1, col=1,
         )
 
-        # ── Transition arrow ────────────────────────────────────────────────
+        # ── Transition arrow (in candle area) ───────────────────────────────
         if direction and direction in prev_d_state:
             prev = prev_d_state[direction]
             if d_state != prev and d_state != "D0":
+                trans_y = price_max + price_pad * 0.3 if direction == "up" else price_min - price_pad * 0.3
                 fig.add_annotation(
-                    x=ep["start_time"],
-                    y=ann_y + (price_pad * 0.2 if direction == "up" else -price_pad * 0.2),
+                    x=ep["start_time"], y=trans_y,
                     ax=-40, ay=0,
                     text=f"{prev}→{d_state}",
                     showarrow=True,
@@ -399,7 +448,7 @@ def build_figure(session_date, candles, episodes, profiles):
         if direction:
             prev_d_state[direction] = d_state
 
-        # ── Start/end markers ───────────────────────────────────────────────
+        # ── Start/end markers on boundary line ──────────────────────────────
         marker_symbol = DIRECTION_MARKER.get(direction, "circle")
         fig.add_trace(
             go.Scatter(
@@ -433,6 +482,61 @@ def build_figure(session_date, candles, episodes, profiles):
             row=1, col=1,
         )
 
+    # ── IBH/IBL toggle button ───────────────────────────────────────────────
+    has_curr = curr_ibh_trace is not None or curr_ibl_trace is not None
+    has_prior = prior_ibh_trace is not None or prior_ibl_trace is not None
+
+    if has_curr and has_prior:
+        n_total = len(fig.data)
+        # Build visibility arrays: True for all non-IB traces, then set IB pairs
+        base_vis = [True] * n_total
+
+        def _make_vis(show_curr, show_prior):
+            vis = list(base_vis)
+            if curr_ibh_trace is not None:
+                vis[curr_ibh_trace] = show_curr
+            if curr_ibl_trace is not None:
+                vis[curr_ibl_trace] = show_curr
+            if prior_ibh_trace is not None:
+                vis[prior_ibh_trace] = show_prior
+            if prior_ibl_trace is not None:
+                vis[prior_ibl_trace] = show_prior
+            return vis
+
+        toggle_buttons = [
+            dict(
+                label=f"Current IBH/IBL ({session_date})",
+                method="update",
+                args=[{"visible": _make_vis(True, False)}],
+            ),
+            dict(
+                label=f"Prior IBH/IBL ({prior_date})",
+                method="update",
+                args=[{"visible": _make_vis(False, True)}],
+            ),
+            dict(
+                label="Both IBH/IBL",
+                method="update",
+                args=[{"visible": _make_vis(True, True)}],
+            ),
+        ]
+
+        updatemenus = [dict(
+            type="buttons",
+            direction="right",
+            x=0.0,
+            xanchor="left",
+            y=1.12,
+            yanchor="top",
+            buttons=toggle_buttons,
+            font=dict(size=10),
+            bgcolor="rgba(255,255,255,0.9)",
+            bordercolor="#cbd5e1",
+            borderwidth=1,
+        )]
+    else:
+        updatemenus = []
+
     # ── Summary panel ───────────────────────────────────────────────────────
     disc_eps = day_episodes[day_episodes["state_type"] == "discovery"]
     total_disc = len(disc_eps)
@@ -446,7 +550,9 @@ def build_figure(session_date, candles, episodes, profiles):
     if pd.notna(prior_vah) and pd.notna(prior_val):
         summary_lines.append(f"Ref: Prior VAH {prior_vah:.0f} / VAL {prior_val:.0f}")
     if pd.notna(ibh) and pd.notna(ibl):
-        summary_lines.append(f"IB formed: {ibh:.0f} / {ibl:.0f} ({ibh - ibl:.0f}pt)")
+        summary_lines.append(f"Current IB: {ibh:.0f} / {ibl:.0f} ({ibh - ibl:.0f}pt)")
+    if pd.notna(prior_ibh) and pd.notna(prior_ibl):
+        summary_lines.append(f"Prior IB: {prior_ibh:.0f} / {prior_ibl:.0f} ({prior_ibh - prior_ibl:.0f}pt)")
     summary_lines += [
         f"Episodes: {total_disc} discovery / {len(day_episodes)} total",
         f"Rejections: {total_rej}  ·  Acceptances: {total_acc}",
@@ -488,7 +594,7 @@ def build_figure(session_date, candles, episodes, profiles):
     # ── Layout ──────────────────────────────────────────────────────────────
     fig.update_layout(
         title=dict(
-            text=f"MNQ Pre-IB Discovery — {session_date} (prior day + overnight + pre-IB)",
+            text=f"MNQ Pre-IB Discovery — {session_date} (2-day RTH view)",
             font=dict(size=16),
         ),
         xaxis_rangeslider_visible=False,
@@ -496,8 +602,8 @@ def build_figure(session_date, candles, episodes, profiles):
         yaxis_title="Price",
         yaxis2_title="Volume",
         template="plotly_white",
-        height=750,
-        margin=dict(l=60, r=200, t=60, b=40),
+        height=800,
+        margin=dict(l=60, r=200, t=80, b=140),
         legend=dict(
             orientation="v",
             yanchor="top", y=0.65,
@@ -508,6 +614,7 @@ def build_figure(session_date, candles, episodes, profiles):
             borderwidth=1,
         ),
         hovermode="x unified",
+        updatemenus=updatemenus,
     )
 
     fig.update_yaxes(range=[price_min - price_pad, price_max + price_pad], row=1, col=1)
@@ -516,7 +623,7 @@ def build_figure(session_date, candles, episodes, profiles):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Plotly candle + pre-IB episode overlay (two-day view).")
+    parser = argparse.ArgumentParser(description="Plotly candle + pre-IB episode overlay (two-day RTH view).")
     parser.add_argument("date", nargs="?", default=None, help="Session date (YYYY-MM-DD)")
     parser.add_argument("--save", action="store_true", help="Save to HTML instead of opening browser")
     parser.add_argument("--list", action="store_true", help="List available session dates with D1+ activity")
@@ -539,7 +646,6 @@ def main():
         return
 
     if args.date is None:
-        # Auto-select: highest D-state, then most episodes
         best_date = None
         best_score = -1
         d_order = {"D0": 0, "D1": 1, "D2": 2, "D3": 3, "D4+": 4}
