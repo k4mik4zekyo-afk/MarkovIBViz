@@ -1,8 +1,11 @@
 """
 candle_episode_viz.py — Plotly candlestick visualization with Markov episode overlays.
 
-Displays a single trading day's post-IB 5-minute candles with:
+Displays a single trading day's full RTH session (pre-IB + post-IB) 5-minute candles
+with post-IB episode overlays including:
 - IBH / IBL reference boundaries
+- Prior RTH VAH / VAL reference lines (pre-IB discovery boundaries)
+- Phase separator at IB formation (7:30am)
 - Episode shading (discovery vs balance) with color-coded backgrounds
 - Failure count (D-state) annotations on each discovery episode
 - Terminal outcome labels (A, A*, R, B) at episode end
@@ -68,12 +71,12 @@ def available_dates(episodes):
 
 
 def build_figure(session_date, candles, episodes, profiles):
-    """Build the Plotly figure for a single trading day."""
+    """Build the Plotly figure for a single trading day (full RTH: pre-IB + post-IB)."""
 
     # ── Filter data ─────────────────────────────────────────────────────────
     day_candles = candles[
         (candles["session_date"] == session_date) &
-        (candles["phase"] == "post_ib")
+        (candles["phase"].isin(["pre_ib", "post_ib"]))
     ].copy().sort_values("datetime").reset_index(drop=True)
 
     day_episodes = episodes[episodes["session_date"] == session_date].copy().reset_index(drop=True)
@@ -81,7 +84,7 @@ def build_figure(session_date, candles, episodes, profiles):
     day_profile = profiles[profiles["session_date"] == session_date]
 
     if day_candles.empty:
-        print(f"No post-IB candle data for {session_date}.")
+        print(f"No candle data for {session_date}.")
         sys.exit(1)
     if day_episodes.empty:
         print(f"No episodes for {session_date}.")
@@ -89,6 +92,8 @@ def build_figure(session_date, candles, episodes, profiles):
 
     ibh = day_profile["ibh"].iloc[0]
     ibl = day_profile["ibl"].iloc[0]
+    prior_vah = day_profile["prior_rth_vah"].iloc[0] if "prior_rth_vah" in day_profile.columns else np.nan
+    prior_val = day_profile["prior_rth_val"].iloc[0] if "prior_rth_val" in day_profile.columns else np.nan
 
     price_min = day_candles["low"].min()
     price_max = day_candles["high"].max()
@@ -170,6 +175,42 @@ def build_figure(session_date, candles, episodes, profiles):
         annotation_font=dict(color="#f59e0b", size=10),
         row=1, col=1,
     )
+
+    # ── Prior RTH VAH / VAL reference lines ─────────────────────────────────
+    if pd.notna(prior_vah):
+        fig.add_hline(
+            y=prior_vah, line=dict(color="#8b5cf6", width=1, dash="dot"),
+            annotation_text=f"Prior VAH {prior_vah:.2f}",
+            annotation_position="top left",
+            annotation_font=dict(color="#8b5cf6", size=9),
+            row=1, col=1,
+        )
+    if pd.notna(prior_val):
+        fig.add_hline(
+            y=prior_val, line=dict(color="#8b5cf6", width=1, dash="dot"),
+            annotation_text=f"Prior VAL {prior_val:.2f}",
+            annotation_position="bottom left",
+            annotation_font=dict(color="#8b5cf6", size=9),
+            row=1, col=1,
+        )
+
+    # ── IB formation separator (vertical line at 7:30am) ────────────────────
+    pre_ib_candles = day_candles[day_candles["phase"] == "pre_ib"]
+    if not pre_ib_candles.empty:
+        ib_boundary_time = pre_ib_candles["datetime"].max() + pd.Timedelta(minutes=5)
+        fig.add_vline(
+            x=ib_boundary_time,
+            line=dict(color="#94a3b8", width=1.5, dash="dashdot"),
+            row=1, col=1,
+        )
+        fig.add_annotation(
+            x=ib_boundary_time, y=price_max + price_pad * 0.95,
+            text="IB Formed",
+            showarrow=False,
+            font=dict(size=9, color="#64748b"),
+            bgcolor="rgba(255,255,255,0.8)",
+            row=1, col=1,
+        )
 
     # ── Episode annotations ─────────────────────────────────────────────────
     # Tracks the running failure count per direction for transition detection
@@ -325,8 +366,12 @@ def build_figure(session_date, candles, episodes, profiles):
 
     summary_lines = [
         f"<b>{session_date}</b>",
-        f"IB Range: {ib_range:.1f}pt",
-        f"Episodes: {total_disc} discovery / {len(day_episodes)} total",
+        f"IB Range: {ib_range:.1f}pt  (IBH {ibh:.0f} / IBL {ibl:.0f})",
+    ]
+    if pd.notna(prior_vah) and pd.notna(prior_val):
+        summary_lines.append(f"Prior VAH {prior_vah:.0f} / VAL {prior_val:.0f}")
+    summary_lines += [
+        f"Post-IB: {total_disc} discovery / {len(day_episodes)} total",
         f"Rejections: {total_rej}  ·  Acceptances: {total_acc}",
         f"Max D-state: {max_d}",
     ]
@@ -368,7 +413,7 @@ def build_figure(session_date, candles, episodes, profiles):
     # ── Layout ──────────────────────────────────────────────────────────────
     fig.update_layout(
         title=dict(
-            text=f"MNQ Post-IB Discovery Episodes — {session_date}",
+            text=f"MNQ Full RTH Session — {session_date}",
             font=dict(size=16),
         ),
         xaxis_rangeslider_visible=False,
