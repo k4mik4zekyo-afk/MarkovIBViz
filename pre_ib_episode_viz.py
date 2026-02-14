@@ -23,6 +23,8 @@ Usage:
 import argparse
 import sys
 import os
+import tempfile
+import webbrowser
 
 import pandas as pd
 import numpy as np
@@ -180,7 +182,9 @@ def build_figure(session_date, candles, episodes, profiles):
     # ── Candlestick trace ───────────────────────────────────────────────────
     hover_texts = []
     for _, r in all_candles.iterrows():
+        t = r["datetime"].strftime("%Y-%m-%d %H:%M")
         hover_texts.append(
+            f"<b>{t}</b><br>"
             f"O: {r['open']:.2f}  H: {r['high']:.2f}<br>"
             f"L: {r['low']:.2f}  C: {r['close']:.2f}<br>"
             f"Vol: {int(r['volume']):,}"
@@ -408,21 +412,19 @@ def build_figure(session_date, candles, episodes, profiles):
             row=1, col=1,
         )
 
-    # ── Episode annotations (below volume panel) ───────────────────────────
+    # ── Episode data collection + markers ─────────────────────────────────
     prev_d_state = {}
-    disc_counter = 0  # for alternating y-levels
+    episode_rows = []
 
     for _, ep in day_episodes.iterrows():
         outcome = ep["terminal_outcome"]
         state_type = ep["state_type"]
         direction = ep["direction"] if pd.notna(ep["direction"]) else None
         d_state = ep["discovery_state"]
-        mid_time = ep["start_time"] + (ep["end_time"] - ep["start_time"]) / 2
 
         if state_type == "balance":
             continue
 
-        # ── Discovery episode annotations ───────────────────────────────────
         fc = int(ep["failure_count_at_start"])
         ext_pts = ep["max_extension_points"]
         ext_atr = ep["max_extension_atr"] if pd.notna(ep["max_extension_atr"]) else 0
@@ -435,35 +437,27 @@ def build_figure(session_date, candles, episodes, profiles):
             marker_y = prior_val if pd.notna(prior_val) else ibl
 
         outcome_label = outcome
-        if outcome == "A" and ep.get("acceptance_achieved"):
+        acc_achieved = bool(ep.get("acceptance_achieved")) if pd.notna(ep.get("acceptance_achieved")) else False
+        if outcome == "A" and acc_achieved:
             acc_min = int(ep["time_in_acceptance_min"]) if pd.notna(ep["time_in_acceptance_min"]) else 0
             outcome_label = f"A ({acc_min}m)"
 
-        # Compact single-line format
-        fail_tag = f" (x{fc} fail)" if fc > 0 else ""
-        ann_text = f"<b>{d_state}</b>{fail_tag} → <b>{outcome_label}</b>  {ext_pts:.0f}pt/{ext_atr:.1f}σ  {dur_min}m"
-
-        dir_arrow = "\u25B2" if direction == "up" else "\u25BC"
-        ann_text = f"{dir_arrow} {ann_text}"
-
         text_color = OUTCOME_TEXT.get(outcome, "#374151")
 
-        # Alternate between two y-levels below volume
-        y_level = -0.07 if disc_counter % 2 == 0 else -0.16
-        disc_counter += 1
-
-        fig.add_annotation(
-            x=mid_time, y=y_level,
-            xref="x2", yref="paper",
-            text=ann_text,
-            showarrow=False,
-            font=dict(size=9, color=text_color),
-            align="center",
-            bgcolor="rgba(255,255,255,0.92)",
-            bordercolor=text_color,
-            borderwidth=1,
-            borderpad=3,
-        )
+        # Collect row for HTML table
+        episode_rows.append({
+            "direction": direction or "",
+            "d_state": d_state,
+            "failures": fc,
+            "outcome": outcome,
+            "outcome_label": outcome_label,
+            "ext_pts": ext_pts,
+            "ext_atr": ext_atr,
+            "duration": dur_min,
+            "start": ep["start_time"].strftime("%H:%M") if pd.notna(ep["start_time"]) else "",
+            "end": ep["end_time"].strftime("%H:%M") if pd.notna(ep["end_time"]) else "",
+            "acceptance": acc_achieved,
+        })
 
         # ── Transition arrow (in candle area) ───────────────────────────────
         if direction and direction in prev_d_state:
@@ -646,8 +640,8 @@ def build_figure(session_date, candles, episodes, profiles):
         yaxis2_title="Volume",
         template="plotly_white",
         width=1800,
-        height=1600,
-        margin=dict(l=60, r=220, t=80, b=160),
+        height=1200,
+        margin=dict(l=60, r=220, t=80, b=60),
         legend=dict(
             orientation="v",
             yanchor="top", y=0.65,
@@ -661,9 +655,106 @@ def build_figure(session_date, candles, episodes, profiles):
         updatemenus=updatemenus,
     )
 
-    fig.update_yaxes(range=[price_min - price_pad, price_max + price_pad], row=1, col=1)
+    # X-axis: hourly minor ticks
+    fig.update_xaxes(dtick=3600000, tickformat="%H:%M", row=2, col=1)
+    fig.update_xaxes(dtick=3600000, tickformat="%H:%M", row=1, col=1)
 
-    return fig
+    # Y-axis: allow interactive zoom/pan (not fixed)
+    fig.update_yaxes(
+        range=[price_min - price_pad, price_max + price_pad],
+        fixedrange=False,
+        row=1, col=1,
+    )
+
+    return fig, episode_rows
+
+
+def _build_episode_table_html(episode_rows, title="Discovery Episodes"):
+    """Build a styled HTML table from episode row data."""
+    outcome_css = {
+        "A": "color:#059669;font-weight:bold",
+        "A*": "color:#0284c7;font-weight:bold",
+        "R": "color:#dc2626;font-weight:bold",
+        "B": "color:#64748b",
+        "C": "color:#d97706;font-weight:bold",
+    }
+
+    rows_html = []
+    for i, row in enumerate(episode_rows):
+        dir_arrow = "\u25B2" if row["direction"] == "up" else "\u25BC" if row["direction"] == "down" else ""
+        dir_color = "#059669" if row["direction"] == "up" else "#dc2626" if row["direction"] == "down" else "#64748b"
+        oc_style = outcome_css.get(row["outcome"], "")
+        acc_icon = "\u2713" if row["acceptance"] else ""
+        bg = "#f8fafc" if i % 2 == 0 else "#ffffff"
+
+        rows_html.append(
+            f'<tr style="background:{bg}">'
+            f'<td style="text-align:center">{i + 1}</td>'
+            f'<td style="text-align:center;color:{dir_color};font-size:15px">{dir_arrow}</td>'
+            f'<td style="text-align:center;font-weight:bold">{row["d_state"]}</td>'
+            f'<td style="text-align:center">{row["failures"]}</td>'
+            f'<td style="text-align:center" title="{row["outcome_label"]}">'
+            f'<span style="{oc_style}">{row["outcome_label"]}</span></td>'
+            f'<td style="text-align:right">{row["ext_pts"]:.1f}</td>'
+            f'<td style="text-align:right">{row["ext_atr"]:.2f}</td>'
+            f'<td style="text-align:right">{row["duration"]}m</td>'
+            f'<td style="text-align:center">{row["start"]}</td>'
+            f'<td style="text-align:center">{row["end"]}</td>'
+            f'<td style="text-align:center;color:#059669">{acc_icon}</td>'
+            f"</tr>"
+        )
+
+    return f"""
+    <div style="max-width:1800px;margin:10px auto 30px auto;font-family:'Segoe UI',system-ui,sans-serif">
+      <h3 style="margin:0 0 8px 0;color:#1e293b;font-size:15px">{title}</h3>
+      <table style="border-collapse:collapse;width:100%;font-size:13px">
+        <thead>
+          <tr style="background:#1e293b;color:white">
+            <th style="padding:8px 10px">#</th>
+            <th style="padding:8px 10px">Dir</th>
+            <th style="padding:8px 10px">D-State</th>
+            <th style="padding:8px 10px">Fails</th>
+            <th style="padding:8px 10px">Outcome</th>
+            <th style="padding:8px 10px">Ext (pt)</th>
+            <th style="padding:8px 10px">Ext (ATR)</th>
+            <th style="padding:8px 10px">Duration</th>
+            <th style="padding:8px 10px">Start</th>
+            <th style="padding:8px 10px">End</th>
+            <th style="padding:8px 10px">Acc</th>
+          </tr>
+        </thead>
+        <tbody>
+          {"".join(rows_html)}
+        </tbody>
+      </table>
+    </div>
+    """
+
+
+def _write_html_with_table(fig, episode_rows, out_path, table_title="Discovery Episodes"):
+    """Write a combined HTML file with the Plotly chart and an episode table beneath it."""
+    plotly_div = fig.to_html(full_html=False, include_plotlyjs="cdn")
+    table_html = _build_episode_table_html(episode_rows, title=table_title)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{table_title}</title>
+  <style>
+    body {{ margin: 0; padding: 0; background: #ffffff; }}
+    table td, table th {{ border-bottom: 1px solid #e2e8f0; }}
+    table tr:hover td {{ background: #e0f2fe !important; }}
+  </style>
+</head>
+<body>
+{plotly_div}
+{table_html}
+</body>
+</html>"""
+
+    with open(out_path, "w") as f:
+        f.write(html)
 
 
 def main():
@@ -711,14 +802,19 @@ def main():
             print(f"Date {session_date} not found. Use --list to see available dates.")
             sys.exit(1)
 
-    fig = build_figure(session_date, candles, episodes, profiles)
+    fig, episode_rows = build_figure(session_date, candles, episodes, profiles)
+    table_title = f"Pre-IB Discovery Episodes — {session_date}"
 
     if args.save:
         out_path = os.path.join(OUTPUT_DIR, f"pre_ib_episodes_{session_date}.html")
-        fig.write_html(out_path)
+        _write_html_with_table(fig, episode_rows, out_path, table_title=table_title)
         print(f"Saved: {out_path}")
     else:
-        fig.show()
+        tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False, dir=OUTPUT_DIR)
+        _write_html_with_table(fig, episode_rows, tmp.name, table_title=table_title)
+        tmp.close()
+        webbrowser.open(f"file://{tmp.name}")
+        print(f"Opened: {tmp.name}")
 
 
 if __name__ == "__main__":
