@@ -1,8 +1,9 @@
 """
 pre_ib_episode_viz.py — Plotly candlestick visualization with pre-IB Markov episode overlays.
 
-Displays two full RTH sessions (prior day 6:30am–1:00pm + current day 6:30am–1:00pm)
-with pre-IB episode overlays on the current day's pre-IB window including:
+Displays prior day RTH + overnight + current day RTH with pre-IB episode
+overlays on the current day's pre-IB window. Includes a range slider to
+zoom into specific regions. Features:
 - Prior RTH VAH / VAL reference boundaries (pre-IB discovery boundaries)
 - Prior RTH POC
 - Toggle button to switch between prior day IBH/IBL vs current day IBH/IBL
@@ -109,7 +110,7 @@ def build_figure(session_date, candles, episodes, profiles):
             prior_ibh = pp["ibh"] if pd.notna(pp.get("ibh")) else np.nan
             prior_ibl = pp["ibl"] if pd.notna(pp.get("ibl")) else np.nan
 
-    # ── Gather candles: 2 full RTH sessions ─────────────────────────────────
+    # ── Gather candles: prior RTH + overnight + current RTH ───────────────
     frames = []
 
     # Prior day full RTH (pre_ib + post_ib)
@@ -120,6 +121,15 @@ def build_figure(session_date, candles, episodes, profiles):
         ].copy()
         prior_rth["section"] = "prior_rth"
         frames.append(prior_rth)
+
+    # Overnight bars (live under the prior session_date)
+    if prior_date:
+        overnight = candles[
+            (candles["session_date"] == prior_date) &
+            (candles["phase"] == "overnight")
+        ].copy()
+        overnight["section"] = "overnight"
+        frames.append(overnight)
 
     # Current day full RTH (pre_ib + post_ib)
     current_rth = candles[
@@ -327,6 +337,28 @@ def build_figure(session_date, candles, episodes, profiles):
                 text=f"Prior RTH End ({prior_date})",
                 showarrow=False,
                 font=dict(size=8, color="#64748b"),
+                bgcolor="rgba(255,255,255,0.8)",
+                row=1, col=1,
+            )
+
+    # Overnight start
+    if prior_date:
+        overnight_bars = candles[
+            (candles["session_date"] == prior_date) &
+            (candles["phase"] == "overnight")
+        ]
+        if not overnight_bars.empty:
+            on_start_time = overnight_bars["datetime"].min()
+            fig.add_vline(
+                x=on_start_time,
+                line=dict(color="#6b7280", width=1, dash="dot"),
+                row=1, col=1,
+            )
+            fig.add_annotation(
+                x=on_start_time, y=price_max + price_pad * 0.6,
+                text="Overnight Start",
+                showarrow=False,
+                font=dict(size=8, color="#6b7280"),
                 bgcolor="rgba(255,255,255,0.8)",
                 row=1, col=1,
             )
@@ -594,15 +626,15 @@ def build_figure(session_date, candles, episodes, profiles):
     # ── Layout ──────────────────────────────────────────────────────────────
     fig.update_layout(
         title=dict(
-            text=f"MNQ Pre-IB Discovery — {session_date} (2-day RTH view)",
+            text=f"MNQ Pre-IB Discovery — {session_date} (prior RTH + overnight + current RTH)",
             font=dict(size=16),
         ),
-        xaxis_rangeslider_visible=False,
+        xaxis2_rangeslider=dict(visible=True, thickness=0.06),
         xaxis2_title="Time (PT)",
         yaxis_title="Price",
         yaxis2_title="Volume",
         template="plotly_white",
-        height=800,
+        height=850,
         margin=dict(l=60, r=200, t=80, b=140),
         legend=dict(
             orientation="v",
