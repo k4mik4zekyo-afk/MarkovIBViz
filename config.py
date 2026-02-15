@@ -15,8 +15,15 @@ CONFIG = {
     # ATR lookback period (bars on resampled data)
     'atr_window': 5,
     
-    # Opening Range duration in minutes from 6:30am
+    # Opening Range duration in minutes from 6:30am (used for OR analysis)
     'opening_window_minutes': 15,
+
+    # Opening Range window for Fibonacci visualization (minutes from 6:30am)
+    # Default: 10 minutes (6:30-6:40) — the first two 5-min candles
+    'opening_range_fib_minutes': 10,
+
+    # Fibonacci levels drawn on the Opening Range (0.0 = low, 1.0 = high)
+    'opening_range_fib_levels': [0.0, 0.25, 0.50, 0.75, 1.0],
     
     # Minimum sustained duration for Acceptance outcome (minutes)
     'acceptance_threshold_minutes': 30,

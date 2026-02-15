@@ -23,11 +23,14 @@ Usage:
 import argparse
 import sys
 import os
+from datetime import time, timedelta
 
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+from config import CONFIG, SESSION_TIMES
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 
@@ -58,12 +61,35 @@ DIRECTION_MARKER = {
     "down": "triangle-down",
 }
 
+# Colours for Opening Range Fibonacci levels (from low to high)
+FIB_COLORS = {
+    0.0:  "#e11d48",   # rose-600  (OR low)
+    0.25: "#f97316",   # orange-500
+    0.50: "#eab308",   # yellow-500
+    0.75: "#22c55e",   # green-500
+    1.0:  "#06b6d4",   # cyan-500  (OR high)
+}
+FIB_LABELS = {0.0: "0%", 0.25: "25%", 0.50: "50%", 0.75: "75%", 1.0: "100%"}
+
 
 def load_data():
-    """Load cleaned candle data, pre-IB episode log, and session profiles."""
+    """Load cleaned candle data, pre-IB episode log, session profiles, and ATR."""
     candles = pd.read_csv(os.path.join(OUTPUT_DIR, "cleaned_data.csv"), parse_dates=["datetime"])
     episodes = pd.read_csv(os.path.join(OUTPUT_DIR, "episode_log_pre_ib.csv"), parse_dates=["start_time", "end_time"])
     profiles = pd.read_csv(os.path.join(OUTPUT_DIR, "session_profiles.csv"))
+
+    # Merge ATR data onto candles
+    vol_path = os.path.join(OUTPUT_DIR, "volatility_data.csv")
+    if os.path.exists(vol_path):
+        vol = pd.read_csv(vol_path, parse_dates=["datetime"])
+        atr_col = [c for c in vol.columns if c.startswith("atr_") and c != "atr_14"]
+        atr_col = atr_col[0] if atr_col else "atr_5"
+        candles = candles.merge(vol[["datetime", atr_col]], on="datetime", how="left")
+        if atr_col != "atr":
+            candles.rename(columns={atr_col: "atr"}, inplace=True)
+    else:
+        candles["atr"] = np.nan
+
     return candles, episodes, profiles
 
 
@@ -72,8 +98,17 @@ def available_dates(episodes):
     return sorted(episodes["session_date"].unique())
 
 
-def _get_prior_session_date(session_date, profiles):
-    """Get the session date immediately before the given date."""
+def _get_prior_session_date(session_date, profiles, candles=None):
+    """Get the prior session date that has RTH bars (pre_ib or post_ib).
+
+    On Mondays, the immediately preceding session_date is Sunday which has no
+    RTH bars (futures open Sunday evening with overnight only).  Walk backward
+    through the sorted date list until a date with RTH data is found.
+
+    When *candles* is provided the check is authoritative (look for actual
+    pre_ib/post_ib rows).  Otherwise fall back to the profile-level
+    prior_rth_vah column as a proxy.
+    """
     all_dates = sorted(profiles["session_date"].unique())
     try:
         idx = all_dates.index(session_date)
@@ -81,13 +116,29 @@ def _get_prior_session_date(session_date, profiles):
         return None
     if idx == 0:
         return None
-    return all_dates[idx - 1]
+
+    # Walk backward to find a date with actual RTH bars
+    for i in range(idx - 1, -1, -1):
+        candidate = all_dates[i]
+        if candles is not None:
+            rth_bars = candles[
+                (candles["session_date"] == candidate) &
+                (candles["phase"].isin(["pre_ib", "post_ib"]))
+            ]
+            if not rth_bars.empty:
+                return candidate
+        else:
+            # Fallback: check profile has prior RTH data computed
+            prof_row = profiles[profiles["session_date"] == candidate]
+            if not prof_row.empty and pd.notna(prof_row.iloc[0].get("ibh")):
+                return candidate
+    return None
 
 
 def build_figure(session_date, candles, episodes, profiles):
     """Build the Plotly figure for a two-day view centred on the pre-IB window."""
 
-    prior_date = _get_prior_session_date(session_date, profiles)
+    prior_date = _get_prior_session_date(session_date, profiles, candles)
     day_profile = profiles[profiles["session_date"] == session_date]
     if day_profile.empty:
         print(f"No session profile for {session_date}.")
@@ -105,7 +156,17 @@ def build_figure(session_date, candles, episodes, profiles):
     # ── Gather candles: prior day RTH + overnight + current pre-IB ──────────
     frames = []
 
-    # Prior day: pre_ib + post_ib (the RTH bars)
+    # For the overnight bars we need the *immediate* predecessor session_date
+    # (e.g. Sunday for Monday) which may differ from prior_date when that was
+    # pushed back to find actual RTH bars (e.g. Friday).
+    all_dates = sorted(profiles["session_date"].unique())
+    try:
+        cur_idx = all_dates.index(session_date)
+    except ValueError:
+        cur_idx = 0
+    immediate_prior = all_dates[cur_idx - 1] if cur_idx > 0 else None
+
+    # Prior day: pre_ib + post_ib (the RTH bars) — uses the date with actual RTH
     if prior_date:
         prior_rth = candles[
             (candles["session_date"] == prior_date) &
@@ -114,10 +175,16 @@ def build_figure(session_date, candles, episodes, profiles):
         prior_rth["section"] = "prior_rth"
         frames.append(prior_rth)
 
-    # Overnight bars live under the prior session_date
+    # Overnight bars — collect from prior_date's overnight (post-RTH on that day)
+    # PLUS any intermediate sessions' overnight (e.g. Sunday for weekend gaps)
+    overnight_dates = set()
     if prior_date:
+        overnight_dates.add(prior_date)
+    if immediate_prior and immediate_prior != prior_date:
+        overnight_dates.add(immediate_prior)
+    if overnight_dates:
         overnight = candles[
-            (candles["session_date"] == prior_date) &
+            (candles["session_date"].isin(overnight_dates)) &
             (candles["phase"] == "overnight")
         ].copy()
         overnight["section"] = "overnight"
@@ -183,6 +250,22 @@ def build_figure(session_date, candles, episodes, profiles):
             increasing_fillcolor="#22c55e",
             decreasing_fillcolor="#ef4444",
             whiskerwidth=0.4,
+        ),
+        row=1, col=1,
+    )
+
+    # ── ATR hover trace (invisible line that shows ATR in unified tooltip) ──
+    atr_vals = all_candles["atr"] if "atr" in all_candles.columns else pd.Series(np.nan, index=all_candles.index)
+    fig.add_trace(
+        go.Scatter(
+            x=all_candles["datetime"],
+            y=all_candles["close"],
+            mode="markers",
+            marker=dict(size=0, opacity=0),
+            name="ATR",
+            customdata=atr_vals,
+            hovertemplate="ATR: %{customdata:.2f}<extra></extra>",
+            showlegend=False,
         ),
         row=1, col=1,
     )
@@ -266,6 +349,38 @@ def build_figure(session_date, candles, episodes, profiles):
             annotation_font=dict(color="#6b7280", size=9),
             row=1, col=1,
         )
+
+    # ── Opening Range Fibonacci levels ───────────────────────────────────────
+    # Compute OR high/low from the first N minutes of the current session
+    or_fib_minutes = CONFIG.get('opening_range_fib_minutes', 10)
+    fib_levels = CONFIG.get('opening_range_fib_levels', [0.0, 0.25, 0.50, 0.75, 1.0])
+    rth_start_time = time(*SESSION_TIMES['rth_start'])
+    or_fib_end_time = (
+        pd.Timestamp.combine(pd.Timestamp(session_date), rth_start_time)
+        + timedelta(minutes=or_fib_minutes)
+    ).time()
+
+    or_fib_bars = current_pre[
+        (current_pre["datetime"].dt.time >= rth_start_time) &
+        (current_pre["datetime"].dt.time < or_fib_end_time)
+    ]
+    if not or_fib_bars.empty:
+        or_high = or_fib_bars["high"].max()
+        or_low = or_fib_bars["low"].min()
+        or_range = or_high - or_low
+
+        for level in fib_levels:
+            fib_price = or_low + or_range * level
+            color = FIB_COLORS.get(level, "#9ca3af")
+            label = FIB_LABELS.get(level, f"{level:.0%}")
+            fig.add_hline(
+                y=fib_price,
+                line=dict(color=color, width=1.5, dash="solid"),
+                annotation_text=f"OR {label} {fib_price:.2f}",
+                annotation_position="bottom left" if level < 0.5 else "top left",
+                annotation_font=dict(color=color, size=9),
+                row=1, col=1,
+            )
 
     # ── Phase separators ────────────────────────────────────────────────────
     # Prior RTH end → overnight start
