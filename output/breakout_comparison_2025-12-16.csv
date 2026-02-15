@@ -1,0 +1,9 @@
+rule,direction,trades,wins,losses,inconclusive,win_rate
+base,long,20,11,9,0,55.0
+base,short,10,0,10,0,0.0
+wick_rejection,long,7,2,5,0,28.57
+wick_rejection,short,8,0,8,0,0.0
+close_reclaim,long,6,3,3,0,50.0
+close_reclaim,short,1,0,1,0,0.0
+break_pullback_reclaim,long,3,2,1,0,66.67
+break_pullback_reclaim,short,1,0,1,0,0.0
