@@ -26,7 +26,7 @@ DATA_FILE = os.path.join(os.path.dirname(__file__), "MNQ_5min_2021Jan_2026Jan.cs
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 
 # ── defaults (can be overridden via function args) ───────────────────
-DEFAULT_OPENING_WINDOW = ("06:30", "06:45")   # 15-min OR
+DEFAULT_OPENING_WINDOW = ("06:30", "06:45")   # 15 minutes OR
 DEFAULT_END_TIME       = "13:00"              # RTH close
 DEFAULT_ATR_PERIOD     = 3                    # bars for ATR lookback
 DEFAULT_ATR_MULTIPLIER = 1.0                  # risk = mult × ATR
@@ -246,15 +246,14 @@ def break_pullback_reclaim_rule(
                 # Looking for pullback
                 if lows[idx] < or_high:
                     state = BreakState.PULLBACK
-                # If we stay above, remain in BREAK
+                # Otherwise stay in BREAK state
             elif state == BreakState.PULLBACK:
                 # Looking for reclaim
                 if closes[idx] > or_high:
                     entries.append(idx)
                     # Reset state machine after entry
                     state = BreakState.NONE
-                # If we break below significantly, invalidate
-                # (for now, we keep it simple and wait for reclaim)
+                # Otherwise continue waiting for reclaim
         
         else:  # short
             if state == BreakState.NONE:
@@ -265,7 +264,7 @@ def break_pullback_reclaim_rule(
                 # Looking for pullback
                 if highs[idx] > or_low:
                     state = BreakState.PULLBACK
-                # If we stay below, remain in BREAK
+                # Otherwise stay in BREAK state
             elif state == BreakState.PULLBACK:
                 # Looking for reclaim
                 if closes[idx] < or_low:
