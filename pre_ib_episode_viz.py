@@ -31,6 +31,8 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from config import CONFIG
+
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 
 # ── Colour palette ──────────────────────────────────────────────────────────
@@ -62,10 +64,21 @@ DIRECTION_MARKER = {
 
 
 def load_data():
-    """Load cleaned candle data, pre-IB episode log, and session profiles."""
+    """Load cleaned candle data, pre-IB episode log, session profiles, and volatility."""
     candles = pd.read_csv(os.path.join(OUTPUT_DIR, "cleaned_data.csv"), parse_dates=["datetime"])
     episodes = pd.read_csv(os.path.join(OUTPUT_DIR, "episode_log_pre_ib.csv"), parse_dates=["start_time", "end_time"])
     profiles = pd.read_csv(os.path.join(OUTPUT_DIR, "session_profiles.csv"))
+
+    # Merge ATR from volatility data
+    vol_path = os.path.join(OUTPUT_DIR, "volatility_data.csv")
+    if os.path.exists(vol_path):
+        vol = pd.read_csv(vol_path, parse_dates=["datetime"])
+        atr_col = f"atr_{CONFIG['atr_window']}"
+        merge_cols = ["datetime"]
+        if atr_col in vol.columns:
+            merge_cols.append(atr_col)
+        candles = candles.merge(vol[merge_cols], on="datetime", how="left")
+
     return candles, episodes, profiles
 
 
@@ -74,22 +87,33 @@ def available_dates(episodes):
     return sorted(episodes["session_date"].unique())
 
 
-def _get_prior_session_date(session_date, profiles):
-    """Get the session date immediately before the given date."""
+def _get_prior_rth_session_date(session_date, candles, profiles):
+    """Get the most recent session date before the given date that has RTH data.
+
+    Walks backward through session dates to find one with pre_ib or post_ib
+    bars. This correctly skips weekends (e.g., Sunday sessions that only have
+    overnight bars) and returns Friday for a Monday session.
+    """
     all_dates = sorted(profiles["session_date"].unique())
     try:
         idx = all_dates.index(session_date)
     except ValueError:
         return None
-    if idx == 0:
-        return None
-    return all_dates[idx - 1]
+    for i in range(idx - 1, -1, -1):
+        candidate = all_dates[i]
+        has_rth = not candles[
+            (candles["session_date"] == candidate) &
+            (candles["phase"].isin(["pre_ib", "post_ib"]))
+        ].empty
+        if has_rth:
+            return candidate
+    return None
 
 
 def build_figure(session_date, candles, episodes, profiles):
     """Build the Plotly figure showing two full RTH sessions with pre-IB episode overlays."""
 
-    prior_date = _get_prior_session_date(session_date, profiles)
+    prior_date = _get_prior_rth_session_date(session_date, candles, profiles)
     day_profile = profiles[profiles["session_date"] == session_date]
     if day_profile.empty:
         print(f"No session profile for {session_date}.")
@@ -124,10 +148,17 @@ def build_figure(session_date, candles, episodes, profiles):
         prior_rth["section"] = "prior_rth"
         frames.append(prior_rth)
 
-    # Overnight bars (live under the prior session_date)
+    # Overnight bars — collect from prior RTH date through all intermediate
+    # session dates up to (but not including) the current date.  This handles
+    # weekends where Friday's overnight and Sunday's overnight are on separate
+    # session_dates.
     if prior_date:
+        all_dates = sorted(profiles["session_date"].unique())
+        prior_idx = all_dates.index(prior_date)
+        curr_idx = all_dates.index(session_date)
+        overnight_dates = all_dates[prior_idx:curr_idx]
         overnight = candles[
-            (candles["session_date"] == prior_date) &
+            (candles["session_date"].isin(overnight_dates)) &
             (candles["phase"] == "overnight")
         ].copy()
         overnight["section"] = "overnight"
@@ -180,14 +211,21 @@ def build_figure(session_date, candles, episodes, profiles):
         )
 
     # ── Candlestick trace ───────────────────────────────────────────────────
+    atr_col = f"atr_{CONFIG['atr_window']}"
+    has_atr = atr_col in all_candles.columns
+
     hover_texts = []
     for _, r in all_candles.iterrows():
         t = r["datetime"].strftime("%Y-%m-%d %H:%M")
+        atr_line = ""
+        if has_atr and pd.notna(r.get(atr_col)):
+            atr_line = f"ATR({CONFIG['atr_window']}): {r[atr_col]:.2f}<br>"
         hover_texts.append(
             f"<b>{t}</b><br>"
             f"O: {r['open']:.2f}  H: {r['high']:.2f}<br>"
             f"L: {r['low']:.2f}  C: {r['close']:.2f}<br>"
-            f"Vol: {int(r['volume']):,}"
+            f"Vol: {int(r['volume']):,}<br>"
+            f"{atr_line}"
         )
     fig.add_trace(
         go.Candlestick(
@@ -357,10 +395,8 @@ def build_figure(session_date, candles, episodes, profiles):
 
     # Overnight start
     if prior_date:
-        overnight_bars = candles[
-            (candles["session_date"] == prior_date) &
-            (candles["phase"] == "overnight")
-        ]
+        # Use the overnight frame already assembled (handles weekend gaps)
+        overnight_bars = overnight if not overnight.empty else pd.DataFrame()
         if not overnight_bars.empty:
             on_start_time = overnight_bars["datetime"].min()
             fig.add_vline(
@@ -411,6 +447,46 @@ def build_figure(session_date, candles, episodes, profiles):
             bgcolor="rgba(255,255,255,0.8)",
             row=1, col=1,
         )
+
+    # ── Opening Window Fibonacci levels ────────────────────────────────────
+    # Fib drawn from the opening window (first N minutes from config) of the
+    # current session.  Levels 0%, 25%, 50%, 75%, 100% extend as horizontal
+    # lines from the end of the opening window to the right edge of the chart.
+    opening_minutes = CONFIG["opening_window_minutes"]
+    if not current_pre.empty:
+        rth_open_time = current_pre["datetime"].min()
+        opening_end = rth_open_time + pd.Timedelta(minutes=opening_minutes)
+        ow_bars = current_pre[current_pre["datetime"] < opening_end]
+        if not ow_bars.empty:
+            ow_high = ow_bars["high"].max()
+            ow_low = ow_bars["low"].min()
+            ow_range = ow_high - ow_low
+
+            fib_levels = [
+                (1.00, "100%", ow_high),
+                (0.75, "75%",  ow_low + 0.75 * ow_range),
+                (0.50, "50%",  ow_low + 0.50 * ow_range),
+                (0.25, "25%",  ow_low + 0.25 * ow_range),
+                (0.00, "0%",   ow_low),
+            ]
+            fib_x0 = ow_bars["datetime"].max()
+            fib_x1 = all_candles["datetime"].max()
+            for _pct, label, level in fib_levels:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[fib_x0, fib_x1],
+                        y=[level, level],
+                        mode="lines+text",
+                        line=dict(color="#e87960", width=1, dash="dot"),
+                        text=["", f"Fib {label} {level:.2f}"],
+                        textposition="middle right",
+                        textfont=dict(color="#e87960", size=9),
+                        name=f"Fib {label}",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ),
+                    row=1, col=1,
+                )
 
     # ── Episode data collection + markers ─────────────────────────────────
     prev_d_state = {}
