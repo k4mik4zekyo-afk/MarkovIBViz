@@ -48,6 +48,18 @@ By default, Plotly axes are interactive (drag to zoom/pan). Setting an explicit 
 ### Summary panel position
 Top-right corner (`xref="paper", x=1.0, y=1.0`) with monospace font and semi-transparent background keeps the summary visible without obscuring candle data.
 
+### Weekend/holiday prior session lookup
+`_get_prior_session_date` (simple index-1 lookup) returns the wrong session on Mondays: it finds Sunday, which only has overnight bars and no RTH. Fix: walk backward through session dates to find the most recent one with `pre_ib` or `post_ib` bars. This correctly returns Friday for Monday sessions and handles holidays.
+
+### Overnight bars across weekends
+On weekends, overnight bars span multiple `session_date` values (e.g., Friday's overnight on Friday's session, Sunday's overnight on Sunday's session). Collecting overnight from only the prior session_date misses the gap. Fix: gather overnight bars from all session dates between the prior RTH date and the current date (`all_dates[prior_idx:curr_idx]`).
+
+### ATR in hover text
+The `cleaned_data.csv` does not include ATR — it lives in `volatility_data.csv` (columns: `datetime`, `atr_5`, `atr_14`). Merge by datetime in `load_data()` to make ATR available for hover text. Use `CONFIG['atr_window']` to pick the correct column name (`atr_5` for default config).
+
+### Opening window Fibonacci levels
+Fib levels (0%, 25%, 50%, 75%, 100%) drawn from the high/low of the first `opening_window_minutes` bars in the current session. Extended as dotted horizontal lines from the last opening window bar to the chart's right edge using `go.Scatter` traces (per the toggleability learning — these are traces, not layout shapes). Lines use `hoverinfo="skip"` to avoid cluttering the unified hover tooltip.
+
 ---
 
 ## Data & Domain Learnings
